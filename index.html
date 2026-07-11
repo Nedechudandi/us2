@@ -14,9 +14,12 @@
         button { padding: 15px; border: none; border-radius: 8px; background: #ff4757; color: white; font-size: 16px; font-weight: bold; cursor: pointer; transition: 0.2s; }
         button:hover { background: #ff6b81; }
         .status { font-size: 14px; color: #a4b0be; }
-        #chat-screen { display: none; flex-direction: column; height: 100%; }
+        #chat-screen { display: none; flex-direction: column; height: 100%; position: relative; }
         .chat-header { padding: 15px 20px; background: #2f3542; display: flex; flex-direction: column; align-items: flex-start; border-bottom: 1px solid #3f4451; }
         .header-top { display: flex; justify-content: space-between; align-items: center; width: 100%; }
+        .call-btns { display: flex; gap: 15px; }
+        .call-btn { background: none; border: none; font-size: 20px; cursor: pointer; padding: 5px; transition: 0.2s; }
+        .call-btn:hover { transform: scale(1.2); }
         #typing-status { font-size: 12px; color: #2ed573; margin-top: 2px; height: 15px; font-style: italic; }
         #chat-messages { flex: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
         .msg { max-width: 75%; padding: 10px 14px; border-radius: 15px; font-size: 15px; line-height: 1.4; word-break: break-word; position: relative; display: flex; flex-direction: column; }
@@ -27,8 +30,17 @@
         .chat-input-area { padding: 15px; display: flex; gap: 10px; background: #1e1e1e; border-top: 1px solid #2f3542; align-items: center; }
         #msg-input { flex: 1; padding: 12px; border: none; border-radius: 8px; background: #2f3542; color: white; font-size: 16px; outline: none; }
         .image-btn { background: #2f3542; color: white; padding: 12px; border-radius: 8px; cursor: pointer; font-weight: bold; font-size: 18px; display: flex; align-items: center; justify-content: center; width: 45px; height: 45px; }
-        .image-btn:hover { background: #3f4451; }
         #image-input { display: none; }
+        
+        /* Call Interface Overlay */
+        #call-overlay { display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(18,18,18,0.95); z-index: 10; flex-direction: column; justify-content: center; align-items: center; gap: 20px; }
+        .video-container { display: flex; flex-direction: column; gap: 10px; width: 90%; max-height: 70%; justify-content: center; align-items: center; }
+        video { width: 100%; max-width: 320px; border-radius: 10px; background: #2f3542; transform: scaleX(-1); }
+        #remote-video { max-width: 320px; }
+        #local-video { max-width: 120px; position: absolute; bottom: 90px; right: 20px; border: 2px solid #ff4757; }
+        .call-controls { display: flex; gap: 20px; z-index: 11; }
+        .btn-accept { background: #2ed573; padding: 12px 25px; }
+        .btn-decline { background: #ff4757; padding: 12px 25px; }
     </style>
 </head>
 <body>
@@ -39,11 +51,28 @@
         <button id="btn-host" style="display:none;">I am the Boy</button>
         <button id="btn-join" style="display:none;">I am the Girl</button>
     </div>
+    
     <div id="chat-screen">
+        <!-- Call Screen Overlay -->
+        <div id="call-overlay">
+            <h3 id="call-status">Calling...</h3>
+            <div class="video-container">
+                <video id="remote-video" autoplay playsinline></video>
+                <video id="local-video" autoplay playsinline muted></video>
+            </div>
+            <div class="call-controls">
+                <button id="accept-call-btn" class="btn-accept" style="display:none;">Accept</button>
+                <button id="end-call-btn" class="btn-decline">End Call</button>
+            </div>
+        </div>
+
         <div class="chat-header">
             <div class="header-top">
                 <h3 id="chat-with-title">Connected</h3>
-                <span style="color: #2ed573; font-size: 12px;">● Online</span>
+                <div class="call-btns">
+                    <button class="call-btn" id="audio-call-btn">📞</button>
+                    <button class="call-btn" id="video-call-btn">📹</button>
+                </div>
             </div>
             <div id="typing-status"></div>
         </div>
@@ -56,18 +85,18 @@
         </div>
     </div>
 </div>
+
 <script>
     const BOY_ID = "vinnu-secure-private-key-10293";  
     const GIRL_ID = "bujjulu-secure-private-key-10293";
     let peer = null; let conn = null; let myRole = ""; let typingTimeout;
-    let unreadMessages = [];
+    let unreadMessages = []; let localStream = null; let currentCall = null;
 
     const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     function playNotificationSound() {
-        const osc = audioCtx.createOscillator();
-        const gain = audioCtx.createGain();
-        osc.connect(gain); gain.connect(audioCtx.destination);
-        osc.type = 'sine'; osc.frequency.setValueAtTime(587.33, audioCtx.currentTime);
+        const osc = audioCtx.createOscillator(); const gain = audioCtx.createGain();
+        osc.connect(gain); gain.connect(audioCtx.destination); osc.type = 'sine';
+        osc.frequency.setValueAtTime(587.33, audioCtx.currentTime);
         osc.frequency.setValueAtTime(880, audioCtx.currentTime + 0.1);
         gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
         gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.4);
@@ -94,6 +123,14 @@
     const sendBtn = document.getElementById('send-btn');
     const messagesContainer = document.getElementById('chat-messages');
     const typingStatus = document.getElementById('typing-status');
+    
+    // Call UI elements
+    const callOverlay = document.getElementById('call-overlay');
+    const callStatus = document.getElementById('call-status');
+    const acceptCallBtn = document.getElementById('accept-call-btn');
+    const endCallBtn = document.getElementById('end-call-btn');
+    const localVideo = document.getElementById('local-video');
+    const remoteVideo = document.getElementById('remote-video');
 
     btnHost.style.display = "block"; btnJoin.style.display = "block";
     btnHost.addEventListener('click', () => { myRole = "boy"; initPeer(BOY_ID); audioCtx.resume(); });
@@ -115,6 +152,16 @@
                 conn = peer.connect(BOY_ID); setupChat();
             }
         });
+
+        // Handle Incoming Calls
+        peer.on('call', (call) => {
+            currentCall = call;
+            callOverlay.style.display = 'flex';
+            acceptCallBtn.style.display = 'block';
+            callStatus.innerText = "Incoming Call...";
+            playNotificationSound();
+        });
+
         peer.on('error', (err) => { alert("Connection error. Try refreshing."); location.reload(); });
     }
     
@@ -126,24 +173,14 @@
         conn.on('data', (data) => {
             if(data.type === 'text') {
                 appendMessage(data.text, 'them', data.msgId);
-                playNotificationSound();
-                showNotification("New Message", data.text);
-                
-                if (!document.hidden) {
-                    conn.send({ type: 'read-receipt', msgId: data.msgId });
-                } else {
-                    unreadMessages.push(data.msgId);
-                }
+                playNotificationSound(); showNotification("New Message", data.text);
+                if (!document.hidden) conn.send({ type: 'read-receipt', msgId: data.msgId });
+                else unreadMessages.push(data.msgId);
             } else if(data.type === 'image') {
                 appendImage(data.imageSrc, 'them', data.msgId);
-                playNotificationSound();
-                showNotification("New Message", "Sent you a picture 📷");
-                
-                if (!document.hidden) {
-                    conn.send({ type: 'read-receipt', msgId: data.msgId });
-                } else {
-                    unreadMessages.push(data.msgId);
-                }
+                playNotificationSound(); showNotification("New Message", "Sent you a picture 📷");
+                if (!document.hidden) conn.send({ type: 'read-receipt', msgId: data.msgId });
+                else unreadMessages.push(data.msgId);
             } else if(data.type === 'typing') {
                 typingStatus.innerText = "typing...";
                 clearTimeout(typingTimeout);
@@ -156,44 +193,81 @@
         conn.on('close', () => { alert("Session ended safely."); location.reload(); });
     }
 
-    document.addEventListener("visibilitychange", () => {
-        if (!document.hidden) {
-            sendPendingReceipts();
-        }
-    });
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) sendPendingReceipts(); });
 
     function sendPendingReceipts() {
         if (conn && conn.open && unreadMessages.length > 0) {
-            unreadMessages.forEach(msgId => {
-                conn.send({ type: 'read-receipt', msgId: msgId });
-            });
+            unreadMessages.forEach(msgId => { conn.send({ type: 'read-receipt', msgId: msgId }); });
             unreadMessages = [];
         }
     }
 
-    msgInput.addEventListener('input', () => {
-        if(conn && conn.open) { conn.send({ type: 'typing' }); }
-    });
+    msgInput.addEventListener('input', () => { if(conn && conn.open) conn.send({ type: 'typing' }); });
 
     function sendMessage() {
         const text = msgInput.value.trim();
         if (text && conn) {
             const msgId = 'msg-' + Date.now();
             conn.send({ type: 'text', text: text, msgId: msgId });
-            appendMessage(text, 'me', msgId);
-            msgInput.value = '';
+            appendMessage(text, 'me', msgId); msgInput.value = '';
         }
+    }
+
+    // Call Feature Logics
+    document.getElementById('audio-call-btn').addEventListener('click', () => startCall(false));
+    document.getElementById('video-call-btn').addEventListener('click', () => startCall(true));
+
+    function startCall(isVideo) {
+        const constraints = { audio: true, video: isVideo };
+        navigator.mediaDevices.getUserMedia(constraints).then((stream) => {
+            localStream = stream;
+            localVideo.srcObject = stream;
+            localVideo.style.display = isVideo ? 'block' : 'none';
+            callOverlay.style.display = 'flex';
+            callStatus.innerText = "Calling...";
+            
+            const targetId = (myRole === "boy") ? GIRL_ID : BOY_ID;
+            const call = peer.call(targetId, stream);
+            currentCall = call;
+            setupCallHandlers(call);
+        }).catch(err => alert("Camera/Microphone permission required. Ensure site is HTTPS."));
+    }
+
+    acceptCallBtn.addEventListener('click', () => {
+        acceptCallBtn.style.display = 'none';
+        const isVideo = currentCall.options.constraints ? !!currentCall.options.constraints.video : true;
+        navigator.mediaDevices.getUserMedia({ audio: true, video: isVideo }).then((stream) => {
+            localStream = stream;
+            localVideo.srcObject = stream;
+            localVideo.style.display = isVideo ? 'block' : 'none';
+            currentCall.answer(stream);
+            setupCallHandlers(currentCall);
+        }).catch(err => { alert("Failed to get audio/video streams."); endCall(); });
+    });
+
+    endCallBtn.addEventListener('click', endCall);
+
+    function setupCallHandlers(call) {
+        callStatus.innerText = "On Call";
+        call.on('stream', (remoteStream) => { remoteVideo.srcObject = remoteStream; });
+        call.on('close', () => { endCall(); });
+    }
+
+    function endCall() {
+        callOverlay.style.display = 'none';
+        if (currentCall) { currentCall.close(); currentCall = null; }
+        if (localStream) { localStream.getTracks().forEach(track => track.stop()); localStream = null; }
+        remoteVideo.srcObject = null; localVideo.srcObject = null;
     }
 
     imageInput.addEventListener('change', (e) => {
         const file = e.target.files[0]; if (!file) return;
         const reader = new FileReader();
         reader.onload = function(event) {
-            const imageSrc = event.target.result;
             if (conn) {
                 const msgId = 'msg-' + Date.now();
-                conn.send({ type: 'image', imageSrc: imageSrc, msgId: msgId });
-                appendImage(imageSrc, 'me', msgId);
+                conn.send({ type: 'image', imageSrc: event.target.result, msgId: msgId });
+                appendImage(event.target.result, 'me', msgId);
             }
         };
         reader.readAsDataURL(file); imageInput.value = '';
